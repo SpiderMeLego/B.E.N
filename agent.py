@@ -1,26 +1,54 @@
-
-import client
-import os
-import webbrowser
-import time
-import random
-import requests
 import io
-import soundfile as sf
-import numpy as np
-import cv2
-from datetime import datetime
-from openai import OpenAI
+import json
+import requests
 import sounddevice as sd
+import soundfile as sf
+from openai import OpenAI
+import client as socket_client  # Renamed so OpenAI doesn't overwrite your socket file
+import time
+import datetime
+import readline
+import os
+base_dir = os.getcwd()
+doc_dir = os.path.expanduser("~/Documents")
+downloads_dir = os.path.expanduser("~/Downloads")
+print("Current:", base_dir)
+print("Documents:", doc_dir)
+print("Downloads:", downloads_dir)
 
+ai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+INSTRUCTIONS = "You are Ben, a wise, calm and responsible AI assistant. Keep replies short since they are spoken aloud."
+os.makedirs("chat_logs", exist_ok=True)
+timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+chat_file = f"chat_logs/chat_{timestamp}.jsonl"
+conversation_history = [
+    {"role": "system", "content": "You are a helpful AI assistant."}
+]
+def save_message(role, content):
+    entry = {"role": role, "content": content}
+    conversation_history.append(entry)
 
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY")) 
+    with open(chat_file, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry) + "\n")
+
+print(f"Started new chat: {chat_file}\n")
+while True:
+   
+    user_input = input("You: ")
+    if user_input.lower() in ["exit", "quit"]:
+        break
+
+    save_message("user", user_input)
+    ai_reply = f"Echoing your message (history has {len(conversation_history)} items)"
+    
+    print(f"AI: {ai_reply}\n")
+    save_message("assistant", ai_reply)
 def speak(text):
-    response = client.audio.speech.create(
+    response = ai_client.audio.speech.create(
         model="gpt-4o-mini-tts",
         voice="onyx",
         input=text,
-        instructions="Speak like a wise, calm and responsible AI Assistant named Ben."
+        instructions="Speak like a wise, calm and responsible AI Assistant named Ben.",
     )
     audio_bytes = io.BytesIO(response.content)
     data, samplerate = sf.read(audio_bytes)
@@ -30,10 +58,10 @@ def speak(text):
 def listen(duration=5, samplerate=44100):
     print("Listening...")
     recording = sd.rec(
-        int(duration * samplerate), 
+        int(duration * samplerate),
         samplerate=samplerate,
         channels=1,
-        dtype="int16"
+        dtype="int16",
     )
     sd.wait()
     print("Processing...")
@@ -43,32 +71,18 @@ def listen(duration=5, samplerate=44100):
     audio_buffer.seek(0)
     audio_buffer.name = "audio.wav"
 
-    transcript = client.audio.transcriptions.create(
+    transcript = ai_client.audio.transcriptions.create(
         model="whisper-1",
-        file=audio_buffer
+        file=audio_buffer,
     )
-    
 
     print(f"You said: {transcript.text}")
     return transcript.text
 
-def ask_ai(text):
-    response = client.responses.create(
-        model="gpt-4o-mini",
-        input=text
-    )
-    output = response.output_text
-    return output
-
-
-#weather function
-import json
-import requests
-
 def get_weather(city):
     try:
         geo = requests.get(
-            "https://geocoding-api.open-meteo.com/v1/search",
+            "https://open-meteo.com",
             params={"name": city, "count": 1},
             timeout=10,
         ).json()
@@ -77,7 +91,7 @@ def get_weather(city):
         place = geo["results"][0]
 
         w = requests.get(
-            "https://api.open-meteo.com/v1/forecast",
+            "https://open-meteo.com",
             params={
                 "latitude": place["latitude"],
                 "longitude": place["longitude"],
@@ -116,14 +130,12 @@ TOOL_FUNCS = {
     "get_weather": get_weather,
 }
 
-INSTRUCTIONS = "You are Ben, a wise, calm and responsible AI assistant. Keep replies short since they are spoken aloud."
-
 
 def ask_ai(text, max_steps=5):
     input_items = [{"role": "user", "content": text}]
 
     for _ in range(max_steps):
-        response = client.responses.create(
+        response = ai_client.responses.create(
             model="gpt-4o-mini",
             instructions=INSTRUCTIONS,
             input=input_items,
@@ -146,8 +158,20 @@ def ask_ai(text, max_steps=5):
                 "type": "function_call_output",
                 "call_id": call.call_id,
                 "output": str(result),
-            })
+            }) 
 
     return "I got stuck using my tools, sorry."
 
+
+if __name__ == "__main__":
+    while True:
+        user_text = listen()
+        if not user_text.strip():
+            continue
+        if "goodbye" in user_text.lower() or "exit" in user_text.lower():
+            speak("Goodbye.")
+            break
+        reply = ask_ai(user_text)
+        print(f"Ben: {reply}")
+        speak(reply)
 
